@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f7f3eb" />
+    <meta
+      name="description"
+      content="One! is a private daily car-spotting scoreboard for Dad and Cameron."
+    />
+    <title>One!</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="preconnect" href="https://commons.wikimedia.org" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="splash" id="splash" aria-hidden="true">
+      <div class="splash-mark">
+        <span>One!</span>
+      </div>
+    </div>
+
+    <div class="app-shell">
+      <header class="topbar">
+        <button class="logo-button" type="button" data-view="leaderboard" aria-label="Open leaderboard">
+          <span>One!</span>
+        </button>
+        <div class="date-chip" id="todayLabel"></div>
+        <button class="icon-button" id="themeToggle" type="button" aria-label="Toggle theme">
+          <span id="themeIcon">◐</span>
+        </button>
+      </header>
+
+      <main>
+        <section class="view is-active" id="leaderboardView" aria-labelledby="leaderboardTitle">
+          <div class="section-heading leaderboard-heading">
+            <div>
+              <p class="eyebrow">Today</p>
+              <h1 id="leaderboardTitle">Leaderboard</h1>
+            </div>
+            <div class="total-pill" id="combinedTotal">0 pts</div>
+          </div>
+
+          <div class="player-stack" id="playerCards"></div>
+
+          <section class="vehicle-strip" aria-label="Scoring rules">
+            <article class="vehicle-card">
+              <img
+                src="https://commons.wikimedia.org/wiki/Special:Redirect/file/%2721_Dodge_Durango.jpg?width=960"
+                alt="White Dodge Durango"
+              />
+              <div>
+                <p>Dodge Durango</p>
+                <strong>+1</strong>
+              </div>
+            </article>
+            <article class="vehicle-card">
+              <img
+                src="https://commons.wikimedia.org/wiki/Special:Redirect/file/Tesla_Cybertruck_%2853531704234%29.jpg?width=960"
+                alt="Tesla Cybertruck"
+              />
+              <div>
+                <p>Tesla Cybertruck</p>
+                <strong>+0.5</strong>
+              </div>
+            </article>
+          </section>
+          <p class="credit-line">Vehicle photos via Wikimedia Commons: Bull-Doser and John Bauld.</p>
+
+          <section class="activity-panel">
+            <div class="panel-title-row">
+              <h2>Recent Calls</h2>
+              <button class="text-button" id="undoButton" type="button">Undo</button>
+            </div>
+            <div class="activity-list" id="activityList"></div>
+          </section>
+        </section>
+
+        <section class="view" id="calendarView" aria-labelledby="calendarTitle">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Archive</p>
+              <h1 id="calendarTitle">Calendar</h1>
+            </div>
+            <div class="calendar-controls">
+              <button class="icon-button" id="prevMonth" type="button" aria-label="Previous month">‹</button>
+              <button class="icon-button" id="nextMonth" type="button" aria-label="Next month">›</button>
+            </div>
+          </div>
+
+          <div class="month-title" id="monthTitle"></div>
+          <div class="calendar-grid" id="calendarGrid"></div>
+          <section class="activity-panel">
+            <div class="panel-title-row">
+              <h2 id="selectedDayTitle">Day Detail</h2>
+              <span class="mini-meta" id="selectedWinner"></span>
+            </div>
+            <div class="day-detail" id="dayDetail"></div>
+          </section>
+        </section>
+      </main>
+
+      <nav class="bottom-nav" aria-label="Primary navigation">
+        <button class="nav-button is-active" type="button" data-view="leaderboard">
+          <span>🏁</span>
+          <small>Board</small>
+        </button>
+        <button class="add-button" id="openAdd" type="button" aria-label="Add sighting">
+          <span>+</span>
+        </button>
+        <button class="nav-button" type="button" data-view="calendar">
+          <span>□</span>
+          <small>Month</small>
+        </button>
+      </nav>
+    </div>
+
+    <dialog class="score-sheet" id="scoreDialog">
+      <form method="dialog">
+        <div class="sheet-handle"></div>
+        <div class="sheet-header">
+          <div>
+            <p class="eyebrow">Call it</p>
+            <h2>Add Score</h2>
+          </div>
+          <button class="icon-button" value="close" aria-label="Close">×</button>
+        </div>
+
+        <div class="control-group">
+          <label>Player</label>
+          <div class="segmented" id="playerPicker"></div>
+        </div>
+
+        <div class="control-group">
+          <label>Vehicle</label>
+          <div class="action-grid">
+            <button class="action-card" type="button" data-action="durango">
+              <img
+                src="https://commons.wikimedia.org/wiki/Special:Redirect/file/%2721_Dodge_Durango.jpg?width=480"
+                alt=""
+              />
+              <span>Dodge Durango</span>
+              <strong>+1</strong>
+            </button>
+            <button class="action-card" type="button" data-action="cybertruck">
+              <img
+                src="https://commons.wikimedia.org/wiki/Special:Redirect/file/Tesla_Cybertruck_%2853531704234%29.jpg?width=480"
+                alt=""
+              />
+              <span>Cybertruck</span>
+              <strong>+0.5</strong>
+            </button>
+          </div>
+        </div>
+
+        <button class="penalty-button" type="button" data-action="penalty">
+          Wrong vehicle
+          <strong>-1</strong>
+        </button>
+      </form>
+    </dialog>
+
+    <template id="emptyActivityTemplate">
+      <p class="empty-state">No calls yet. First one gets the board moving.</p>
+    </template>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

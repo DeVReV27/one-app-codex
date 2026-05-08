@@ -1,0 +1,18 @@
+{
+  "name": "One!",
+  "short_name": "One!",
+  "description": "A daily Dodge Durango and Tesla Cybertruck spotting scoreboard.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f3eb",
+  "theme_color": "#ff5a1f",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
