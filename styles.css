@@ -133,9 +133,16 @@ button {
   font-size: 1.45rem;
 }
 
+.topbar-meta {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+}
+
 .date-chip,
 .total-pill,
-.mini-meta {
+.mini-meta,
+.sync-chip {
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--muted);
@@ -143,6 +150,21 @@ button {
   font-weight: 750;
   padding: 8px 11px;
   white-space: nowrap;
+}
+
+.sync-chip {
+  padding: 4px 8px;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.sync-chip.is-online {
+  color: var(--accent-2);
+}
+
+.sync-chip.is-error {
+  color: var(--danger);
 }
 
 .icon-button {

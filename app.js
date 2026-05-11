@@ -9,6 +9,9 @@ const scoreActions = {
   penalty: { label: "Wrong vehicle", delta: -1 },
 };
 
+const supabaseUrl = "https://tgibfvgfcaxuyprmpons.supabase.co";
+const supabasePublishableKey = "sb_publishable_oDbqbqXwcBhPAqNH7VmPBQ_wla8Abzb";
+const gameId = "one-family-scoreboard";
 const storageKey = "one-scorebook-v1";
 const themeKey = "one-theme";
 let state = loadState();
@@ -16,10 +19,14 @@ let activePlayer = players[0].id;
 let calendarDate = new Date();
 let currentDateKey = getCurrentDateKey();
 let selectedDateKey = currentDateKey;
+let supabase = null;
+let isRemoteReady = false;
+let isRendering = false;
 
 const els = {
   splash: document.querySelector("#splash"),
   todayLabel: document.querySelector("#todayLabel"),
+  syncStatus: document.querySelector("#syncStatus"),
   themeToggle: document.querySelector("#themeToggle"),
   themeIcon: document.querySelector("#themeIcon"),
   playerCards: document.querySelector("#playerCards"),
@@ -53,6 +60,7 @@ function init() {
   render();
   bindEvents();
   registerServiceWorker();
+  connectSupabase();
 
   window.setTimeout(() => {
     els.splash.classList.add("is-hidden");
@@ -87,12 +95,15 @@ function bindEvents() {
 }
 
 function render() {
+  if (isRendering) return;
+  isRendering = true;
   refreshCurrentDate();
   seedToday();
   renderLeaderboard();
   renderActivity();
   renderCalendar();
   saveState();
+  isRendering = false;
 }
 
 function seedToday() {
@@ -253,24 +264,28 @@ function setView(view) {
   });
 }
 
-function addEntry(playerId, action) {
+async function addEntry(playerId, action) {
   refreshCurrentDate();
   seedToday();
-  state.days[currentDateKey].entries.push({
+  const entry = {
     id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
     playerId,
     action,
+    gameDate: currentDateKey,
     createdAt: new Date().toISOString(),
-  });
+  };
+  state.days[currentDateKey].entries.push(entry);
   render();
+  await saveRemoteEntry(entry);
 }
 
-function undoLast() {
+async function undoLast() {
   refreshCurrentDate();
   const entries = getEntries(currentDateKey);
   if (!entries.length) return;
-  entries.pop();
+  const removed = entries.pop();
   render();
+  await deleteRemoteEntry(removed);
 }
 
 function getEntries(dateKey) {
@@ -308,6 +323,152 @@ function loadState() {
 
 function saveState() {
   localStorage.setItem(storageKey, JSON.stringify(state));
+}
+
+async function connectSupabase() {
+  setSyncStatus("Connecting", "pending");
+  try {
+    const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
+    supabase = createClient(supabaseUrl, supabasePublishableKey);
+    await pushLocalEntries();
+    await loadRemoteEntries();
+    isRemoteReady = true;
+    setSyncStatus("Synced", "online");
+  } catch (error) {
+    console.warn("Supabase sync unavailable", error);
+    isRemoteReady = false;
+    setSyncStatus("Local", "error");
+  }
+}
+
+async function loadRemoteEntries() {
+  if (!supabase) return;
+  const { data, error } = await supabase
+    .from("sightings")
+    .select("id, player_id, action, game_date, created_at")
+    .eq("game_id", gameId)
+    .order("created_at", { ascending: true });
+
+  if (error) throw error;
+  state = { days: {} };
+  data.forEach((row) => {
+    addEntryToState(remoteRowToEntry(row));
+  });
+  seedToday();
+  render();
+}
+
+async function pushLocalEntries() {
+  if (!supabase) return;
+  const entries = Object.entries(state.days).flatMap(([dateKey, day]) =>
+    (day.entries ?? []).map((entry) => normalizeEntry(entry, dateKey)),
+  );
+  if (!entries.length) return;
+
+  const { data, error: readError } = await supabase
+    .from("sightings")
+    .select("id")
+    .eq("game_id", gameId)
+    .in(
+      "id",
+      entries.map((entry) => entry.id),
+    );
+
+  if (readError) throw readError;
+  const remoteIds = new Set(data.map((row) => row.id));
+  const missingEntries = entries.filter((entry) => !remoteIds.has(entry.id));
+  if (!missingEntries.length) return;
+
+  const { error: insertError } = await supabase.from("sightings").insert(missingEntries.map(entryToRemoteRow));
+  if (insertError) throw insertError;
+}
+
+async function saveRemoteEntry(entry) {
+  if (!supabase) {
+    setSyncStatus("Local", "error");
+    return;
+  }
+
+  setSyncStatus("Saving", "pending");
+  const { error } = await supabase.from("sightings").insert(entryToRemoteRow(entry));
+
+  if (error) {
+    console.warn("Could not save sighting", error);
+    isRemoteReady = false;
+    setSyncStatus("Local", "error");
+    return;
+  }
+
+  isRemoteReady = true;
+  setSyncStatus("Synced", "online");
+}
+
+async function deleteRemoteEntry(entry) {
+  if (!supabase || !entry?.id) {
+    setSyncStatus("Local", "error");
+    return;
+  }
+
+  setSyncStatus("Saving", "pending");
+  const { error } = await supabase.from("sightings").delete().eq("game_id", gameId).eq("id", entry.id);
+
+  if (error) {
+    console.warn("Could not delete sighting", error);
+    isRemoteReady = false;
+    setSyncStatus("Local", "error");
+    return;
+  }
+
+  isRemoteReady = true;
+  setSyncStatus("Synced", "online");
+}
+
+function addEntryToState(entry) {
+  const dateKey = entry.gameDate || toDateKey(new Date(entry.createdAt));
+  if (!state.days[dateKey]) state.days[dateKey] = { entries: [] };
+  if (!state.days[dateKey].entries.some((item) => item.id === entry.id)) {
+    state.days[dateKey].entries.push(entry);
+  }
+}
+
+function normalizeEntry(entry, fallbackDateKey) {
+  return {
+    id: entry.id,
+    playerId: entry.playerId,
+    action: entry.action,
+    gameDate: entry.gameDate || fallbackDateKey,
+    createdAt: entry.createdAt || new Date().toISOString(),
+  };
+}
+
+function entryToRemoteRow(entry) {
+  const action = scoreActions[entry.action];
+  return {
+    id: entry.id,
+    game_id: gameId,
+    player_id: entry.playerId,
+    action: entry.action,
+    points: action.delta,
+    game_date: entry.gameDate || toDateKey(new Date(entry.createdAt)),
+    created_at: entry.createdAt,
+  };
+}
+
+function remoteRowToEntry(row) {
+  return {
+    id: row.id,
+    playerId: row.player_id,
+    action: row.action,
+    gameDate: row.game_date,
+    createdAt: row.created_at,
+  };
+}
+
+function setSyncStatus(label, status) {
+  els.syncStatus.textContent = label;
+  els.syncStatus.classList.toggle("is-online", status === "online");
+  els.syncStatus.classList.toggle("is-error", status === "error");
+  els.syncStatus.classList.toggle("is-pending", status === "pending");
 }
 
 function getInitialTheme() {

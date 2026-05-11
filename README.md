@@ -10,6 +10,24 @@ One! is a mobile-first daily score tracker for spotting Dodge Durangos and Tesla
 
 Scores are stored locally in the browser by calendar day. A new day starts at zero automatically, while previous days stay visible in the month calendar.
 
+## Supabase
+
+The app is configured for a shared private Supabase scoreboard with no login:
+
+- URL: `https://tgibfvgfcaxuyprmpons.supabase.co`
+- Table: `public.sightings`
+- Shared game id: `one-family-scoreboard`
+
+Before deploying, open the Supabase SQL Editor and run:
+
+```sql
+-- See supabase-schema.sql in this folder.
+```
+
+That script creates the table, enables Row Level Security, and adds narrow public policies for this one shared scoreboard. The browser uses the Supabase publishable key. Never put a service role key or secret key in this app.
+
+The app keeps `localStorage` as a fallback. If Supabase is unavailable, calls still work locally and sync is retried on the next load.
+
 ## Run locally
 
 Use any static file server from this folder:
