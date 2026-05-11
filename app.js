@@ -37,6 +37,7 @@ const els = {
   scoreDialog: document.querySelector("#scoreDialog"),
   openAdd: document.querySelector("#openAdd"),
   playerPicker: document.querySelector("#playerPicker"),
+  editCallList: document.querySelector("#editCallList"),
   navButtons: document.querySelectorAll("[data-view]"),
   leaderboardView: document.querySelector("#leaderboardView"),
   calendarView: document.querySelector("#calendarView"),
@@ -69,8 +70,16 @@ function init() {
 
 function bindEvents() {
   els.themeToggle.addEventListener("click", toggleTheme);
-  els.openAdd.addEventListener("click", () => els.scoreDialog.showModal());
+  els.openAdd.addEventListener("click", () => {
+    renderEditCallList();
+    els.scoreDialog.showModal();
+  });
   els.undoButton.addEventListener("click", undoLast);
+  els.editCallList.addEventListener("click", (event) => {
+    const deleteButton = event.target.closest("[data-delete-entry]");
+    if (!deleteButton) return;
+    deleteEntry(currentDateKey, deleteButton.dataset.deleteEntry);
+  });
 
   document.querySelectorAll("[data-action]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -101,6 +110,7 @@ function render() {
   seedToday();
   renderLeaderboard();
   renderActivity();
+  renderEditCallList();
   renderCalendar();
   saveState();
   isRendering = false;
@@ -166,6 +176,39 @@ function renderActivity() {
       <div class="activity-score">${action.delta > 0 ? "+" : ""}${formatScore(action.delta)}</div>
     `;
     els.activityList.append(item);
+  });
+}
+
+function renderEditCallList() {
+  const entries = [...getEntries(currentDateKey)].reverse();
+  els.editCallList.innerHTML = "";
+
+  if (!entries.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "No calls to edit yet.";
+    els.editCallList.append(empty);
+    return;
+  }
+
+  entries.forEach((entry) => {
+    const player = players.find((item) => item.id === entry.playerId);
+    const action = scoreActions[entry.action];
+    const item = document.createElement("div");
+    item.className = "edit-call-item";
+    item.innerHTML = `
+      <div class="activity-main">
+        <strong>${player.name}</strong>
+        <span>${action.label} · ${formatTime(entry.createdAt)}</span>
+      </div>
+      <div class="edit-call-actions">
+        <span class="activity-score">${action.delta > 0 ? "+" : ""}${formatScore(action.delta)}</span>
+        <button class="delete-call-button" type="button" data-delete-entry="${entry.id}" aria-label="Remove ${player.name} ${action.label} call">
+          ×
+        </button>
+      </div>
+    `;
+    els.editCallList.append(item);
   });
 }
 
@@ -284,6 +327,16 @@ async function undoLast() {
   const entries = getEntries(currentDateKey);
   if (!entries.length) return;
   const removed = entries.pop();
+  render();
+  await deleteRemoteEntry(removed);
+}
+
+async function deleteEntry(dateKey, entryId) {
+  const entries = getEntries(dateKey);
+  const entryIndex = entries.findIndex((entry) => entry.id === entryId);
+  if (entryIndex === -1) return;
+
+  const [removed] = entries.splice(entryIndex, 1);
   render();
   await deleteRemoteEntry(removed);
 }

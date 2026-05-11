@@ -1,4 +1,4 @@
-const cacheName = "one-app-v4";
+const cacheName = "one-app-v5";
 const appShell = ["/", "/index.html", "/styles.css", "/app.js", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (event) => {
