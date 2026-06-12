@@ -14,14 +14,17 @@ const supabasePublishableKey = "sb_publishable_oDbqbqXwcBhPAqNH7VmPBQ_wla8Abzb";
 const gameId = "one-family-scoreboard";
 const storageKey = "one-scorebook-v1";
 const themeKey = "one-theme";
+const syncRetryDelay = 5000;
+const requestTimeout = 8000;
 let state = loadState();
 let activePlayer = players[0].id;
 let calendarDate = new Date();
 let currentDateKey = getCurrentDateKey();
 let selectedDateKey = currentDateKey;
-let supabase = null;
 let isRemoteReady = false;
 let isRendering = false;
+let syncTimer = null;
+let syncPromise = null;
 
 const els = {
   splash: document.querySelector("#splash"),
@@ -100,6 +103,13 @@ function bindEvents() {
   els.nextMonth.addEventListener("click", () => {
     calendarDate = new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 1);
     renderCalendar();
+  });
+
+  window.addEventListener("online", connectSupabase);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && !isRemoteReady) {
+      connectSupabase();
+    }
   });
 }
 
@@ -379,30 +389,43 @@ function saveState() {
 }
 
 async function connectSupabase() {
+  if (syncPromise) return syncPromise;
+  syncPromise = runSupabaseSync().finally(() => {
+    syncPromise = null;
+  });
+  return syncPromise;
+}
+
+async function runSupabaseSync() {
+  if (!navigator.onLine) {
+    isRemoteReady = false;
+    setSyncStatus("Offline", "error");
+    scheduleSyncRetry();
+    return;
+  }
+
   setSyncStatus("Connecting", "pending");
   try {
-    const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
-    supabase = createClient(supabaseUrl, supabasePublishableKey);
+    const localEntries = getAllEntries();
+    await loadRemoteEntries();
+    localEntries.forEach(addEntryToState);
     await pushLocalEntries();
     await loadRemoteEntries();
     isRemoteReady = true;
     setSyncStatus("Synced", "online");
+    clearSyncRetry();
   } catch (error) {
     console.warn("Supabase sync unavailable", error);
     isRemoteReady = false;
     setSyncStatus("Local", "error");
+    scheduleSyncRetry();
   }
 }
 
 async function loadRemoteEntries() {
-  if (!supabase) return;
-  const { data, error } = await supabase
-    .from("sightings")
-    .select("id, player_id, action, game_date, created_at")
-    .eq("game_id", gameId)
-    .order("created_at", { ascending: true });
-
-  if (error) throw error;
+  const data = await supabaseRequest(
+    `/sightings?game_id=eq.${encodeURIComponent(gameId)}&select=id,player_id,action,game_date,created_at&order=created_at.asc`,
+  );
   state = { days: {} };
   data.forEach((row) => {
     addEntryToState(remoteRowToEntry(row));
@@ -412,68 +435,83 @@ async function loadRemoteEntries() {
 }
 
 async function pushLocalEntries() {
-  if (!supabase) return;
-  const entries = Object.entries(state.days).flatMap(([dateKey, day]) =>
-    (day.entries ?? []).map((entry) => normalizeEntry(entry, dateKey)),
-  );
+  const entries = getAllEntries().map(ensureRemoteSafeEntry);
   if (!entries.length) return;
 
-  const { data, error: readError } = await supabase
-    .from("sightings")
-    .select("id")
-    .eq("game_id", gameId)
-    .in(
-      "id",
-      entries.map((entry) => entry.id),
-    );
-
-  if (readError) throw readError;
+  const idFilter = entries.map((entry) => entry.id).join(",");
+  const data = await supabaseRequest(
+    `/sightings?game_id=eq.${encodeURIComponent(gameId)}&id=in.(${idFilter})&select=id`,
+  );
   const remoteIds = new Set(data.map((row) => row.id));
   const missingEntries = entries.filter((entry) => !remoteIds.has(entry.id));
   if (!missingEntries.length) return;
 
-  const { error: insertError } = await supabase.from("sightings").insert(missingEntries.map(entryToRemoteRow));
-  if (insertError) throw insertError;
+  await supabaseRequest("/sightings", {
+    method: "POST",
+    body: missingEntries.map(entryToRemoteRow),
+    prefer: "return=minimal",
+  });
+  saveState();
+}
+
+function getAllEntries() {
+  return Object.entries(state.days).flatMap(([dateKey, day]) =>
+    (day.entries ?? []).map((entry) => normalizeEntry(entry, dateKey)),
+  );
 }
 
 async function saveRemoteEntry(entry) {
-  if (!supabase) {
+  if (!navigator.onLine) {
     setSyncStatus("Local", "error");
+    scheduleSyncRetry();
     return;
   }
 
   setSyncStatus("Saving", "pending");
-  const { error } = await supabase.from("sightings").insert(entryToRemoteRow(entry));
-
-  if (error) {
+  try {
+    const remoteEntry = ensureRemoteSafeEntry(entry);
+    await supabaseRequest("/sightings", {
+      method: "POST",
+      body: entryToRemoteRow(remoteEntry),
+      prefer: "return=minimal",
+    });
+  } catch (error) {
     console.warn("Could not save sighting", error);
     isRemoteReady = false;
     setSyncStatus("Local", "error");
+    scheduleSyncRetry();
     return;
   }
 
   isRemoteReady = true;
   setSyncStatus("Synced", "online");
+  clearSyncRetry();
 }
 
 async function deleteRemoteEntry(entry) {
-  if (!supabase || !entry?.id) {
+  if (!navigator.onLine || !entry?.id) {
     setSyncStatus("Local", "error");
+    scheduleSyncRetry();
     return;
   }
 
   setSyncStatus("Saving", "pending");
-  const { error } = await supabase.from("sightings").delete().eq("game_id", gameId).eq("id", entry.id);
-
-  if (error) {
+  try {
+    await supabaseRequest(`/sightings?game_id=eq.${encodeURIComponent(gameId)}&id=eq.${entry.id}`, {
+      method: "DELETE",
+      prefer: "return=minimal",
+    });
+  } catch (error) {
     console.warn("Could not delete sighting", error);
     isRemoteReady = false;
     setSyncStatus("Local", "error");
+    scheduleSyncRetry();
     return;
   }
 
   isRemoteReady = true;
   setSyncStatus("Synced", "online");
+  clearSyncRetry();
 }
 
 function addEntryToState(entry) {
@@ -494,6 +532,74 @@ function normalizeEntry(entry, fallbackDateKey) {
   };
 }
 
+function ensureRemoteSafeEntry(entry) {
+  if (!isUuid(entry.id)) {
+    entry.id = crypto.randomUUID ? crypto.randomUUID() : makeUuidFallback();
+  }
+  return entry;
+}
+
+async function supabaseRequest(path, options = {}) {
+  const method = options.method || "GET";
+  const headers = {
+    apikey: supabasePublishableKey,
+  };
+  if (options.body) headers["Content-Type"] = "application/json";
+  if (options.prefer) headers.Prefer = options.prefer;
+
+  const response = await fetchWithRetry(`${supabaseUrl}/rest/v1${path}`, {
+    method,
+    headers,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`Supabase ${method} ${path} failed: ${response.status} ${message}`);
+  }
+
+  if (response.status === 204 || options.prefer === "return=minimal") return null;
+  return response.json();
+}
+
+async function fetchWithRetry(url, options, attempts = 1) {
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), requestTimeout);
+    try {
+      return await fetch(url, { ...options, signal: controller.signal });
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts - 1) break;
+      await wait(350 * (attempt + 1));
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+  throw lastError;
+}
+
+function scheduleSyncRetry() {
+  if (syncTimer || !navigator.onLine) return;
+  syncTimer = window.setTimeout(() => {
+    syncTimer = null;
+    connectSupabase();
+  }, syncRetryDelay);
+}
+
+function clearSyncRetry() {
+  if (!syncTimer) return;
+  window.clearTimeout(syncTimer);
+  syncTimer = null;
+}
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 function entryToRemoteRow(entry) {
   const action = scoreActions[entry.action];
   return {
@@ -505,6 +611,16 @@ function entryToRemoteRow(entry) {
     game_date: entry.gameDate || toDateKey(new Date(entry.createdAt)),
     created_at: entry.createdAt,
   };
+}
+
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function makeUuidFallback() {
+  return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (char) =>
+    (Number(char) ^ (Math.random() * 16) >> (Number(char) / 4)).toString(16),
+  );
 }
 
 function remoteRowToEntry(row) {

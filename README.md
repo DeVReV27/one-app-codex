@@ -28,6 +28,10 @@ That script creates the table, enables Row Level Security, and adds narrow publi
 
 The app keeps `localStorage` as a fallback. If Supabase is unavailable, calls still work locally and sync is retried on the next load.
 
+If Supabase logs show `relation "supabase_migrations.schema_migrations" does not exist` with
+`application_name: supabase/dashboard`, that log is from Supabase Dashboard checking migration
+history. It is separate from the app's `public.sightings` reads/writes.
+
 ## Run locally
 
 Use any static file server from this folder:
