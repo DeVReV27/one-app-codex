@@ -408,12 +408,14 @@ async function runSupabaseSync() {
   try {
     const localEntries = getAllEntries();
     await loadRemoteEntries();
-    localEntries.forEach(addEntryToState);
-    await pushLocalEntries();
-    await loadRemoteEntries();
     isRemoteReady = true;
     setSyncStatus("Synced", "online");
     clearSyncRetry();
+    pushLocalEntries(localEntries)
+      .then(loadRemoteEntries)
+      .catch((error) => {
+        console.warn("Local backfill skipped", error);
+      });
   } catch (error) {
     console.warn("Supabase sync unavailable", error);
     isRemoteReady = false;
@@ -434,8 +436,8 @@ async function loadRemoteEntries() {
   render();
 }
 
-async function pushLocalEntries() {
-  const entries = getAllEntries().map(ensureRemoteSafeEntry);
+async function pushLocalEntries(entries = getAllEntries()) {
+  entries = entries.map(ensureRemoteSafeEntry);
   if (!entries.length) return;
 
   const idFilter = entries.map((entry) => entry.id).join(",");
@@ -543,6 +545,7 @@ async function supabaseRequest(path, options = {}) {
   const method = options.method || "GET";
   const headers = {
     apikey: supabasePublishableKey,
+    Authorization: `Bearer ${supabasePublishableKey}`,
   };
   if (options.body) headers["Content-Type"] = "application/json";
   if (options.prefer) headers.Prefer = options.prefer;
