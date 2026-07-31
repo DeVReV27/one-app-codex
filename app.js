@@ -16,6 +16,9 @@ const storageKey = "one-scorebook-v1";
 const themeKey = "one-theme";
 const syncRetryDelay = 5000;
 const requestTimeout = 8000;
+const remotePageSize = 500;
+const remoteIdChunkSize = 75;
+const appVersion = "v11";
 const syncedStatus = "synced";
 const pendingStatus = "pending";
 const failedStatus = "failed";
@@ -59,6 +62,12 @@ const els = {
 init();
 
 function init() {
+  window.OneAppDebug = {
+    version: appVersion,
+    lastRemoteRowCount: 0,
+    lastRemotePageCount: 0,
+    lastSyncAt: null,
+  };
   document.documentElement.dataset.theme = getInitialTheme();
   updateTodayLabel();
   setThemeIcon();
@@ -430,9 +439,7 @@ async function runSupabaseSync() {
 }
 
 async function loadRemoteEntries(options = {}) {
-  const data = await supabaseRequest(
-    `/sightings?game_id=eq.${encodeURIComponent(gameId)}&select=id,player_id,action,game_date,created_at&order=created_at.asc`,
-  );
+  const data = await fetchRemoteEntries();
   const localEntries = getAllEntries();
   const remoteIds = new Set(data.map((row) => row.id));
   state = { days: {} };
@@ -450,11 +457,7 @@ async function pushLocalEntries(entries = getUnsyncedEntries()) {
   entries = entries.map(ensureRemoteSafeEntry);
   if (!entries.length) return;
 
-  const idFilter = entries.map((entry) => entry.id).join(",");
-  const data = await supabaseRequest(
-    `/sightings?game_id=eq.${encodeURIComponent(gameId)}&id=in.(${idFilter})&select=id`,
-  );
-  const remoteIds = new Set(data.map((row) => row.id));
+  const remoteIds = await fetchRemoteIds(entries.map((entry) => entry.id));
   const missingEntries = entries.filter((entry) => !remoteIds.has(entry.id));
   if (!missingEntries.length) {
     entries.forEach((entry) => updateLocalEntry(entry.id, { syncStatus: syncedStatus }));
@@ -487,6 +490,43 @@ function shouldPreserveLocalEntry(entry, remoteIds, options) {
   if (options.preserveLocalEntries) return true;
   if (entry.syncStatus !== syncedStatus) return true;
   return Boolean(options.syncStartedAt && entry.createdAt > options.syncStartedAt);
+}
+
+async function fetchRemoteEntries() {
+  const rows = [];
+  let offset = 0;
+  let pageCount = 0;
+
+  while (true) {
+    const page = await supabaseRequest(
+      `/sightings?game_id=eq.${encodeURIComponent(gameId)}&select=id,player_id,action,game_date,created_at&order=created_at.asc&limit=${remotePageSize}&offset=${offset}`,
+    );
+    rows.push(...page);
+    pageCount += 1;
+    if (page.length < remotePageSize) break;
+    offset += remotePageSize;
+  }
+
+  window.OneAppDebug = {
+    ...window.OneAppDebug,
+    lastRemoteRowCount: rows.length,
+    lastRemotePageCount: pageCount,
+    lastSyncAt: new Date().toISOString(),
+  };
+  return rows;
+}
+
+async function fetchRemoteIds(ids) {
+  const remoteIds = new Set();
+  for (let index = 0; index < ids.length; index += remoteIdChunkSize) {
+    const chunk = ids.slice(index, index + remoteIdChunkSize);
+    const idFilter = chunk.join(",");
+    const data = await supabaseRequest(
+      `/sightings?game_id=eq.${encodeURIComponent(gameId)}&id=in.(${idFilter})&select=id`,
+    );
+    data.forEach((row) => remoteIds.add(row.id));
+  }
+  return remoteIds;
 }
 
 async function saveRemoteEntry(entry) {
