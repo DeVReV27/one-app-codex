@@ -1,9 +1,9 @@
-const cacheName = "one-app-v8";
+const cacheName = "one-app-v10";
 const appShell = [
   "/",
   "/index.html",
-  "/styles.css?v=8",
-  "/app.js?v=8",
+  "/styles.css?v=10",
+  "/app.js?v=10",
   "/manifest.webmanifest",
   "/icon.svg",
 ];

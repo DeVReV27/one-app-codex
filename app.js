@@ -16,6 +16,9 @@ const storageKey = "one-scorebook-v1";
 const themeKey = "one-theme";
 const syncRetryDelay = 5000;
 const requestTimeout = 8000;
+const syncedStatus = "synced";
+const pendingStatus = "pending";
+const failedStatus = "failed";
 let state = loadState();
 let activePlayer = players[0].id;
 let calendarDate = new Date();
@@ -326,6 +329,7 @@ async function addEntry(playerId, action) {
     action,
     gameDate: currentDateKey,
     createdAt: new Date().toISOString(),
+    syncStatus: pendingStatus,
   };
   state.days[currentDateKey].entries.push(entry);
   render();
@@ -406,13 +410,14 @@ async function runSupabaseSync() {
 
   setSyncStatus("Connecting", "pending");
   try {
+    const syncStartedAt = new Date().toISOString();
     const localEntries = getAllEntries();
-    await loadRemoteEntries();
+    await loadRemoteEntries({ syncStartedAt });
     isRemoteReady = true;
     setSyncStatus("Synced", "online");
     clearSyncRetry();
     pushLocalEntries(localEntries)
-      .then(loadRemoteEntries)
+      .then(() => loadRemoteEntries({ preserveLocalEntries: true }))
       .catch((error) => {
         console.warn("Local backfill skipped", error);
       });
@@ -424,19 +429,24 @@ async function runSupabaseSync() {
   }
 }
 
-async function loadRemoteEntries() {
+async function loadRemoteEntries(options = {}) {
   const data = await supabaseRequest(
     `/sightings?game_id=eq.${encodeURIComponent(gameId)}&select=id,player_id,action,game_date,created_at&order=created_at.asc`,
   );
+  const localEntries = getAllEntries();
+  const remoteIds = new Set(data.map((row) => row.id));
   state = { days: {} };
   data.forEach((row) => {
     addEntryToState(remoteRowToEntry(row));
   });
+  localEntries
+    .filter((entry) => shouldPreserveLocalEntry(entry, remoteIds, options))
+    .forEach(addEntryToState);
   seedToday();
   render();
 }
 
-async function pushLocalEntries(entries = getAllEntries()) {
+async function pushLocalEntries(entries = getUnsyncedEntries()) {
   entries = entries.map(ensureRemoteSafeEntry);
   if (!entries.length) return;
 
@@ -446,13 +456,19 @@ async function pushLocalEntries(entries = getAllEntries()) {
   );
   const remoteIds = new Set(data.map((row) => row.id));
   const missingEntries = entries.filter((entry) => !remoteIds.has(entry.id));
-  if (!missingEntries.length) return;
+  if (!missingEntries.length) {
+    entries.forEach((entry) => updateLocalEntry(entry.id, { syncStatus: syncedStatus }));
+    return;
+  }
 
   await supabaseRequest("/sightings", {
     method: "POST",
     body: missingEntries.map(entryToRemoteRow),
     prefer: "return=minimal",
+  }).catch((error) => {
+    if (!isDuplicateInsertError(error)) throw error;
   });
+  entries.forEach((entry) => updateLocalEntry(entry.id, { syncStatus: syncedStatus }));
   saveState();
 }
 
@@ -462,8 +478,20 @@ function getAllEntries() {
   );
 }
 
+function getUnsyncedEntries() {
+  return getAllEntries().filter((entry) => entry.syncStatus !== syncedStatus);
+}
+
+function shouldPreserveLocalEntry(entry, remoteIds, options) {
+  if (remoteIds.has(entry.id)) return false;
+  if (options.preserveLocalEntries) return true;
+  if (entry.syncStatus !== syncedStatus) return true;
+  return Boolean(options.syncStartedAt && entry.createdAt > options.syncStartedAt);
+}
+
 async function saveRemoteEntry(entry) {
   if (!navigator.onLine) {
+    updateLocalEntry(entry.id, { syncStatus: failedStatus });
     setSyncStatus("Local", "error");
     scheduleSyncRetry();
     return;
@@ -478,13 +506,24 @@ async function saveRemoteEntry(entry) {
       prefer: "return=minimal",
     });
   } catch (error) {
+    if (isDuplicateInsertError(error)) {
+      updateLocalEntry(entry.id, { syncStatus: syncedStatus });
+      isRemoteReady = true;
+      setSyncStatus("Synced", "online");
+      clearSyncRetry();
+      return;
+    }
     console.warn("Could not save sighting", error);
+    updateLocalEntry(entry.id, { syncStatus: failedStatus });
     isRemoteReady = false;
     setSyncStatus("Local", "error");
     scheduleSyncRetry();
     return;
   }
 
+  updateLocalEntry(entry.id, { syncStatus: syncedStatus });
+  addEntryToState({ ...entry, syncStatus: syncedStatus });
+  render();
   isRemoteReady = true;
   setSyncStatus("Synced", "online");
   clearSyncRetry();
@@ -531,6 +570,7 @@ function normalizeEntry(entry, fallbackDateKey) {
     action: entry.action,
     gameDate: entry.gameDate || fallbackDateKey,
     createdAt: entry.createdAt || new Date().toISOString(),
+    syncStatus: entry.syncStatus || pendingStatus,
   };
 }
 
@@ -620,6 +660,10 @@ function isUuid(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+function isDuplicateInsertError(error) {
+  return String(error?.message || error).includes("23505");
+}
+
 function makeUuidFallback() {
   return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (char) =>
     (Number(char) ^ (Math.random() * 16) >> (Number(char) / 4)).toString(16),
@@ -633,7 +677,18 @@ function remoteRowToEntry(row) {
     action: row.action,
     gameDate: row.game_date,
     createdAt: row.created_at,
+    syncStatus: syncedStatus,
   };
+}
+
+function updateLocalEntry(entryId, updates) {
+  Object.values(state.days).some((day) => {
+    const entry = day.entries?.find((item) => item.id === entryId);
+    if (!entry) return false;
+    Object.assign(entry, updates);
+    return true;
+  });
+  saveState();
 }
 
 function setSyncStatus(label, status) {
